@@ -1,0 +1,32 @@
+{
+  "name": "resume-critic-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Resume Critic App",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "resume",
+    "ai",
+    "api"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.6",
+    "docx": "^9.5.3",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "file-type": "^21.3.0",
+    "jspdf": "^4.1.0",
+    "mammoth": "^1.11.0",
+    "pdfjs-dist": "^5.4.624"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
