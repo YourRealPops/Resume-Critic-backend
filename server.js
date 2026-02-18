@@ -396,6 +396,19 @@ ${(rewrittenResume.certifications || []).join('\n')}
   }
 });
 
+const RENDER_URL = process.env.RENDER_URL;
+
+if (RENDER_URL) {
+  setInterval(async () => {
+    try {
+      await fetch(`${RENDER_URL}/api/health`);
+      console.log('Keep-alive ping sent');
+    } catch (err) {
+      console.error('Keep-alive ping failed:', err.message);
+    }
+  }, 10 * 60 * 1000); // every 10 minutes
+}
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
