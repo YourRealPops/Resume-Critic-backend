@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: [
     'http://localhost:5173',
-    'https://resumecritic.netlify.app', 
+    'https://resumecritic.netlify.app',
   ],
   methods: ['GET', 'POST'],
   credentials: true
@@ -32,6 +32,35 @@ const model = genAI.getGenerativeModel(
   { model: "gemini-2.5-flash" },
   { apiVersion: 'v1' }
 );
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function safeParseJSON(text) {
+  let cleaned = text.replace(/```json|```/g, "").trim();
+
+  cleaned = cleaned.replace(/[\x00-\x1F\x7F]/g, (char) => {
+    if (char === '\n' || char === '\r' || char === '\t') return ' ';
+    return '';
+  });
+
+  cleaned = cleaned.replace(/ +/g, ' ');
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error("Could not parse AI response as JSON. Please try again.");
+  }
+}
+
+function getCurrentDate() {
+  return new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+}
 
 // ── Parsers ────────────────────────────────────────────────────────────────
 
@@ -80,8 +109,6 @@ async function extractTextFromDocx(buffer) {
 function extractTextFromTxt(buffer) {
   return buffer.toString('utf-8');
 }
-
-// ── Main router — detects file type and calls the right parser ─────────────
 
 async function extractText(buffer, mimeTypeHint = "") {
   const detected = await fileTypeFromBuffer(buffer);
@@ -142,14 +169,8 @@ app.post('/api/analyze-resume', async (req, res) => {
       throw new Error("The file appears to be empty or image-based (e.g. a scanned PDF).");
     }
 
-    const currentDate = new Date().toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-
     const prompt = `
-      You are an expert resume critic. Today's date is ${currentDate}.
+      You are an expert resume critic. Today's date is ${getCurrentDate()}.
       Use this date as context when evaluating timelines, employment gaps, 
       graduation dates, and experience durations. Do not assume any dates 
       are in the future if they have already passed based on today's date.
@@ -171,14 +192,20 @@ app.post('/api/analyze-resume', async (req, res) => {
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
-
-    const cleanJson = text.replace(/```json|```/g, "").trim();
-    const critique = JSON.parse(cleanJson);
+    const critique = safeParseJSON(text);
 
     res.json({ success: true, critique });
 
   } catch (err) {
     console.error("DETAILED ERROR:", err);
+
+    if (err.status === 429) {
+      return res.status(429).json({
+        success: false,
+        error: "The AI service is currently busy or the daily limit has been reached. Please try again in a few minutes.",
+      });
+    }
+
     res.status(500).json({
       success: false,
       error: "AI analysis failed",
@@ -195,7 +222,6 @@ app.post('/api/rewrite-resume', async (req, res) => {
       return res.status(400).json({ success: false, error: "Missing resume file or critique" });
     }
 
-    // Re-extract full text fresh from the original file — guarantees all pages are read
     let resumeContent = "";
     try {
       const base64Data = resumeFile.includes('base64,')
@@ -212,14 +238,10 @@ app.post('/api/rewrite-resume', async (req, res) => {
       throw new Error("Could not extract enough text from the resume.");
     }
 
-    console.log(`Extracted ${resumeContent.length} characters across all pages`); // helpful debug log
-
-    const currentDate = new Date().toLocaleDateString('en-US', {
-      year: 'numeric', month: 'long', day: 'numeric'
-    });
+    console.log(`Extracted ${resumeContent.length} characters across all pages`);
 
     const prompt = `
-      You are a professional resume editor. Today's date is ${currentDate}.
+      You are a professional resume editor. Today's date is ${getCurrentDate()}.
       
       Your job is to IMPROVE the resume's presentation, NOT to invent or change any factual details.
       
@@ -287,13 +309,20 @@ app.post('/api/rewrite-resume', async (req, res) => {
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
-    const cleanJson = text.replace(/```json|```/g, "").trim();
-    const rewrittenResume = JSON.parse(cleanJson);
+    const rewrittenResume = safeParseJSON(text);
 
     res.json({ success: true, rewrittenResume });
 
   } catch (err) {
     console.error("Rewrite Error:", err);
+
+    if (err.status === 429) {
+      return res.status(429).json({
+        success: false,
+        error: "The AI service is currently busy or the daily limit has been reached. Please try again in a few minutes.",
+      });
+    }
+
     res.status(500).json({ success: false, error: "Rewrite failed", details: err.message });
   }
 });
@@ -327,6 +356,12 @@ ${rewrittenResume.skills.join(', ')}
 
 CERTIFICATIONS
 ${(rewrittenResume.certifications || []).join('\n')}
+
+REFERENCES
+${(rewrittenResume.references || []).map(r =>
+  typeof r === 'string' ? r :
+  `${r.name} | ${r.title} | ${r.company}${r.phone ? ' | ' + r.phone : ''}${r.email ? ' | ' + r.email : ''}`
+).join('\n')}
     `.trim();
 
     if (format === 'txt') {
@@ -374,6 +409,16 @@ ${(rewrittenResume.certifications || []).join('\n')}
               new Paragraph({ text: "CERTIFICATIONS", heading: HeadingLevel.HEADING_1 }),
               ...rewrittenResume.certifications.map(c => new Paragraph({ text: c })),
             ] : []),
+
+            ...(rewrittenResume.references?.length ? [
+              new Paragraph({ text: "REFERENCES", heading: HeadingLevel.HEADING_1 }),
+              ...rewrittenResume.references.map(r =>
+                new Paragraph({
+                  text: typeof r === 'string' ? r :
+                    `${r.name} | ${r.title} | ${r.company}${r.phone ? ' | ' + r.phone : ''}${r.email ? ' | ' + r.email : ''}`
+                })
+              ),
+            ] : []),
           ]
         }]
       });
@@ -396,6 +441,8 @@ ${(rewrittenResume.certifications || []).join('\n')}
   }
 });
 
+// ── Keep alive on Render free tier ─────────────────────────────────────────
+
 const RENDER_URL = process.env.RENDER_URL;
 
 if (RENDER_URL) {
@@ -406,7 +453,7 @@ if (RENDER_URL) {
     } catch (err) {
       console.error('Keep-alive ping failed:', err.message);
     }
-  }, 10 * 60 * 1000); // every 10 minutes
+  }, 10 * 60 * 1000);
 }
 
 app.listen(PORT, () => {
